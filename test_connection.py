@@ -6,6 +6,7 @@ async def main():
     params = StdioServerParameters(
         command="python3",
         args=["mcp_servers/task_server.py"]        
+        # args=["mcp_servers/calendar_server.py"],
     )
     async with stdio_client(params) as (read, write):
         async with ClientSession(read, write) as session:
