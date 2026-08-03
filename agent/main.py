@@ -8,6 +8,7 @@ load_dotenv()
 from langchain_openai import ChatOpenAI
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.prebuilt import create_react_agent
+from langgraph.checkpoint.memory import MemorySaver
 
 
 SYSTEM_PROMPT = (
@@ -16,6 +17,8 @@ SYSTEM_PROMPT = (
     "할일 관련 요청은 task 관련 도구를, 캘린더 일정 관련 요청은 event 관련 도구를 사용해라. "
     f"오늘 날짜는 {date.today().isoformat()}이다."
 )
+
+THREAD_ID = "default-session"
 
 
 async def main():
@@ -33,7 +36,12 @@ async def main():
     })
     tools = await client.get_tools()
     model = ChatOpenAI(model="gpt-4o-mini")
-    agent = create_react_agent(model, tools, prompt=SYSTEM_PROMPT)
+
+    #MemorySaver: 대화 히스토리 메모리(RAM)에 저장 
+    #프로세스 종료하면 사라짐 
+    checkpointer = MemorySaver()
+    agent = create_react_agent(model, tools, prompt=SYSTEM_PROMPT, checkpointer=checkpointer)
+    
     print(f"도구 {len(tools)}개 로드됨: {[t.name for t in tools]}")
     print("개인 비서 시작 — 종료하려면 'exit' 입력\n")
 
@@ -41,19 +49,18 @@ async def main():
     #챗 루프 
     while True:
         user_ipt = input("You: ").strip()
-
         if user_ipt.lower() in ("exit", "quit"):
             print("종료합니다.")
             break
-
         if not user_ipt:
             continue
- 
-        result = await agent.ainvoke({
-            "messages": [{"role": "user", "content": user_ipt}]
-        })
 
+        result = await agent.ainvoke(
+            {"messages": [{"role": "user", "content": user_ipt}]},
+            config={"configurable": {"thread_id": THREAD_ID}}  # 같은 thread_id로 대화 맥락 유지
+        )
         print(f"Agent: {result['messages'][-1].content}\n")
+
 
         # 전체 흐름 출력 (디버깅용)
         # for msg in result["messages"]:
