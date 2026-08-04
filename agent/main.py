@@ -9,6 +9,8 @@ from langchain_openai import ChatOpenAI
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langgraph.prebuilt import create_react_agent
 from langgraph.checkpoint.memory import MemorySaver
+from langfuse import propagate_attributes
+from langfuse.langchain import CallbackHandler  
 
 
 SYSTEM_PROMPT = (
@@ -45,20 +47,31 @@ async def main():
     print(f"도구 {len(tools)}개 로드됨: {[t.name for t in tools]}")
     print("개인 비서 시작 — 종료하려면 'exit' 입력\n")
 
+    #Langfuse 콜백 핸들러 생성
+    langfuse_handler = CallbackHandler()
+
 
     #챗 루프 
     while True:
-        user_ipt = input("You: ").strip()
-        if user_ipt.lower() in ("exit", "quit"):
+        user_input = input("You: ").strip()
+        if user_input.lower() in ("exit", "quit"):
             print("종료합니다.")
             break
-        if not user_ipt:
+        if not user_input:
             continue
 
-        result = await agent.ainvoke(
-            {"messages": [{"role": "user", "content": user_ipt}]},
-            config={"configurable": {"thread_id": THREAD_ID}}  # 같은 thread_id로 대화 맥락 유지
-        )
+        #Langfuse 콜백 핸들러 생성
+        with propagate_attributes(
+            session_id=THREAD_ID,
+            user_id="local-user",
+        ):
+            result = await agent.ainvoke(
+                {"messages": [{"role": "user", "content": user_input}]},
+                config={
+                    "configurable": {"thread_id": THREAD_ID},
+                    "callbacks": [langfuse_handler],
+                }
+            )
         print(f"Agent: {result['messages'][-1].content}\n")
 
 
