@@ -115,12 +115,6 @@ def human_review_node(state: AgentState) -> dict:
             }
         )            
 
-# def after_human_review(state: AgentState) -> str:
-#     print(f"[DEBUG] approved: {state.get('approved')}")
-#     if state.get("approved") is False:
-#         return "agent"
-#     return "tools"
-
 
 def build_graph(model, tools):
     """ 노드들을 엣지로 연결해서 그래프 완성 """
@@ -148,11 +142,7 @@ def build_graph(model, tools):
         is_dangerous,
         {"human_review": "human_review", "tools": "tools"}
     )
-    # graph.add_conditional_edges(
-    #     "human_review",
-    #     after_human_review,
-    #     {"agent": "agent", "tools": "tools"}
-    # )
+
     #tools -> agent(루프)
     graph.add_edge("tools", "agent")
 
