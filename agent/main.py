@@ -32,6 +32,7 @@ SYSTEM_PROMPT = (
     "너는 사용자의 할일과 일정을 관리해주는 개인 비서다. "
     "사용자가 요청하면 반드시 제공된 도구를 호출해서 처리해라. "
     "할일 관련 요청은 task 관련 도구를, 캘린더 일정 관련 요청은 event 관련 도구를 사용해라. "
+    "도구 실행 중 오류가 발생하면 사용자에게 친절하게 안내하고 다시 시도를 권유해라. "
     f"오늘 날짜는 {date.today().isoformat()}이다."
 )
 
@@ -44,10 +45,24 @@ def make_agent_node(model, tools):
     model_with_tools = model.bind_tools(tools)
 
     def agent_node(state: AgentState) -> dict:
-        resp = model_with_tools.invoke(
-            [{"role":"system", "content":SYSTEM_PROMPT}] + state["messages"]
-        )
-        return {"messages":[resp], "approved": None}
+        last_error = None
+
+        for attempt in range(3): #최대 3번 시도
+            try:
+                resp = model_with_tools.invoke(
+                    [{"role":"system", "content":SYSTEM_PROMPT}] + state["messages"]
+                )
+
+                return {"messages":[resp], "approved": None}
+
+            except Exception as e:
+                last_error = e
+                if attempt < 2:
+                    import time
+                    time.sleep(2 ** attempt)  # 1초, 2초 대기 후 재시도 (exponential backoff)
+                    continue
+        #3번 실패 
+        raise last_error
 
     return agent_node
 
@@ -166,6 +181,8 @@ async def main():
     config={
         "configurable": {"thread_id": THREAD_ID},
         "callbacks": [langfuse_handler],
+        "recursion_limit": 10, #최대 10번 노드 실행(무한 루프 방지)
+
     }
 
     print(f"도구 {len(tools)}개 로드됨: {[t.name for t in tools]}")
@@ -179,39 +196,49 @@ async def main():
         if not user_input:
             continue
 
-        #Langfuse
-        with propagate_attributes(session_id=THREAD_ID, user_id="local-user"):
-            result = await graph.ainvoke(
-                {"messages": [{"role": "user", "content": user_input}]},
-                config=config
-            )
-
-        # interrupt가 발생했는지 확인
-        state = await graph.aget_state(config)
-        interrupted = any(
-            task.interrupts
-            for task in state.tasks
-            if hasattr(task, "interrupts")
-        )
-
-        # print(f"[DEBUG] state.next: {state.next}")
-        # print(f"[DEBUG] state.tasks: {state.tasks}")
-
-        if interrupted:
-            for task in state.tasks:
-                if hasattr(task, "interrupts") and task.interrupts:
-                    print(f"\nAgent: {task.interrupts[0].value['message']}")
-                    break
-
-            approval = input("You: ").strip().lower()
-
+        try:
+            #Langfuse
             with propagate_attributes(session_id=THREAD_ID, user_id="local-user"):
                 result = await graph.ainvoke(
-                    Command(resume=approval),
+                    {"messages": [{"role": "user", "content": user_input}]},
                     config=config
                 )
-            
-        print(f"Agent: {result['messages'][-1].content}\n")
+    
+            # interrupt가 발생했는지 확인
+            state = await graph.aget_state(config)
+            interrupted = any(
+                task.interrupts
+                for task in state.tasks
+                if hasattr(task, "interrupts")
+            )
+    
+            # print(f"[DEBUG] state.next: {state.next}")
+            # print(f"[DEBUG] state.tasks: {state.tasks}")
+    
+            if interrupted:
+                for task in state.tasks:
+                    if hasattr(task, "interrupts") and task.interrupts:
+                        print(f"\nAgent: {task.interrupts[0].value['message']}")
+                        break
+    
+                approval = input("You: ").strip().lower()
+    
+                with propagate_attributes(session_id=THREAD_ID, user_id="local-user"):
+                    result = await graph.ainvoke(
+                        Command(resume=approval),
+                        config=config
+                    )
+                
+            print(f"Agent: {result['messages'][-1].content}\n")
 
+        except KeyboardInterrupt:
+            print("\n종료합니다.")
+            break
+        except Exception as e:
+            if "GraphRecursionError" in type(e).__name__ or "recursion" in str(e).lower():
+                print("Agent: 요청을 처리하는 데 너무 많은 단계가 필요합니다. 더 구체적으로 말씀해주세요.\n")
+            else:
+                print(f"Agent: 오류가 발생했습니다. 다시 시도해주세요. ({type(e).__name__})\n")
+        continue
 
 asyncio.run(main())
